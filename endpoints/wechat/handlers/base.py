@@ -131,7 +131,8 @@ class MessageHandler(ABC):
 
             # get first response chunk
             first_chunk = next(response_generator)
-
+            # # 打印第一条响应内容确定响应回复时间
+            # logger.info(f"received first chunk from AI interface: {first_chunk}")
             # check if it contains conversation_id
             if isinstance(first_chunk, dict) and 'conversation_id' in first_chunk:
                 self.new_conversation_id = first_chunk['conversation_id']

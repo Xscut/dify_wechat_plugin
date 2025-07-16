@@ -43,17 +43,27 @@ class WechatCustomMessageSender:
         """
         # check if there is a valid token in cache
         cache_key = f"{self.app_id}_{self.app_secret}"
-        if cache_key in self.TOKEN_CACHE:
-            token_info = self.TOKEN_CACHE[cache_key]
-            # check if the token is expired (refresh 5 minutes before expiration)
-            if token_info['expires_at'] > time.time() + 300:
-                return token_info['token']
-        
+        # 修改逻辑，token改为调用stable_token接口获取
+        # if cache_key in self.TOKEN_CACHE:
+        #     token_info = self.TOKEN_CACHE[cache_key]
+        #     # check if the token is expired (refresh 5 minutes before expiration)
+        #     if token_info['expires_at'] > time.time() + 300:
+        #         return token_info['token']
+
         # request new access token
-        url = f"https://{self.api_base_url}/cgi-bin/token?grant_type=client_credential&appid={self.app_id}&secret={self.app_secret}"
-        
+        url = f"https://{self.api_base_url}/cgi-bin/stable_token"
+        data = {
+            "grant_type": "client_credential",
+            "appid": self.app_id,
+            "secret": self.app_secret
+        }
         try:
-            response = requests.get(url, timeout=10)
+            response = requests.post(
+                url=url,
+                data=json.dumps(data, ensure_ascii=False).encode('utf-8'),
+                headers={'Content-Type': 'application/json'},
+                timeout=10
+            )
             result = response.json()
             
             if 'access_token' in result:

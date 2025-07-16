@@ -27,7 +27,7 @@ logger.setLevel(logging.INFO)
 logger.addHandler(plugin_logger_handler)
 
 # default timeout and response settings
-DEFAULT_HANDLER_TIMEOUT = 5.0  # default timeout time 5.0 seconds, fixed value
+DEFAULT_HANDLER_TIMEOUT = 15.0  # default timeout time 5.0 seconds, fixed value
 DEFAULT_TEMP_RESPONSE = "内容生成耗时较长，请稍等..."  # default temporary response message
 # retry waiting time, will be dynamically updated based on configuration
 DEFAULT_RETRY_WAIT_TIMEOUT_RATIO = 0.7  # 默认重试等待超时系数
@@ -225,18 +225,29 @@ class WechatPost(Endpoint):
         # wait for processing to complete or timeout
         is_completed = completion_event.wait(timeout=DEFAULT_HANDLER_TIMEOUT)
         
-        if is_completed:
-            # AI处理完成，直接返回结果
-            response_content = message_status.get('result', '') or "抱歉，处理结果为空"
-            MessageStatusTracker.mark_result_returned(message)
+        # if is_completed:
+        #     # AI处理完成，直接返回结果
+        #     response_content = message_status.get('result', '') or "抱歉，处理结果为空"
+        #     MessageStatusTracker.mark_result_returned(message)
             
-            response_xml = ResponseFormatter.format_xml(message, response_content)
-            encrypted_response = crypto_adapter.encrypt_message(response_xml, request)
-            return Response(encrypted_response, status=200, content_type="application/xml")
+        #     response_xml = ResponseFormatter.format_xml(message, response_content)
+        #     encrypted_response = crypto_adapter.encrypt_message(response_xml, request)
+        #     return Response(encrypted_response, status=200, content_type="application/xml")
+        # else:
+        #     # 处理超时，启用重试机制
+        #     logger.info("AI处理超时，启用重试机制")
+        #     if enable_custom_message:
+        #         async_thread = threading.Thread(
+        #             target=self._wait_and_send_custom_message,
+        #             args=(message, message_status, settings, completion_event),
+        #             daemon=True,
+        #             name=f"CustomerMsgSender-{message.from_user}"
+        #         )
+        #         async_thread.start()  
+        #     return Response("", status=500)
+        if message.event == 'user_enter_tempsession':
+            return Response("", status=200, content_type="application/xml")
         else:
-            # 处理超时，启用重试机制
-            logger.info("AI处理超时，启用重试机制")
-            
             if enable_custom_message:
                 async_thread = threading.Thread(
                     target=self._wait_and_send_custom_message,
@@ -391,15 +402,17 @@ class WechatPost(Endpoint):
                 retry_completed = retry_completion_event.wait(timeout=20)
                 if not retry_completed:
                     logger.warning("等待重试流程超时")
-            
+            # logger.info(message_status.get('skip_custom_message', False))
+            # logger.info(MessageStatusTracker.mark_result_returned(message))
             # 检查是否需要跳过客服消息
-            if message_status.get('skip_custom_message', False):
-                return
+            # if message_status.get('skip_custom_message', False):
+            #     return
             
-            if not MessageStatusTracker.mark_result_returned(message):
-                return
+            # if not MessageStatusTracker.mark_result_returned(message):
+            #     return
                 
             # 获取处理结果并发送客服消息
+            # logger.info(f"message_status: {message_status}")
             content = message_status.get('result', '') or "抱歉，无法获取处理结果"
             
             app_id = settings.get('app_id')
