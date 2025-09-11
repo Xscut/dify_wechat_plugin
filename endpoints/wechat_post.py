@@ -244,6 +244,20 @@ class WechatPost(Endpoint):
         #         async_thread.start()  
         #     return Response("", status=500)
         if message.event == 'user_enter_tempsession':
+            app_id = settings.get('app_id')
+            app_secret = settings.get('app_secret')
+            wechat_api_proxy_url = settings.get('wechat_api_proxy_url')
+            
+            if not app_id or not app_secret:
+                logger.error("缺少app_id或app_secret配置")
+                return
+
+            sender = WechatCustomMessageSender(app_id, app_secret, wechat_api_proxy_url)
+            send_result = sender.send_text_message(
+                open_id=message.from_user,
+                content="""您好！我是华大基因的智能客服ChatBGI，可以为您解答产品和基因检测相关问题~
+需要人工服务请访问https://webchat-bj.clink.cn/chat.html?accessId=967f422d-1257-414b-8d97-0c712dc216de&language=zh_CN链接，点击右上方转人工按钮进行咨询，或拨打客服联系电话400-605-6655进行咨询（人工服务时间：周一至周日 9:00-17:00）。"""
+            )
             return Response("", status=200, content_type="application/xml")
         else:
             if enable_custom_message:
