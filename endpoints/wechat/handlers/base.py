@@ -100,7 +100,81 @@ class MessageHandler(ABC):
         except Exception as e:
             logger.warning(f"failed to get stored conversation id: {str(e)}")
             return None
+    def get_response(self, query, conversation_id=None, inputs=None):
+        """Call Dify streaming API and yield parsed JSON dicts from SSE safely.
 
+        Skips keepalive/comment lines and tolerates non-JSON chunks to avoid breaking the stream.
+        """
+        import requests
+        import json
+
+        # Build payload
+        data = {
+            "inputs": inputs or {},
+            "query": query,
+            "response_mode": "streaming",
+            "user": "abc-123",
+            "files": []
+        }
+        if conversation_id:
+            data["conversation_id"] = conversation_id
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer app-tjrWavWWBGcHbVxXspyaCail"
+        }
+        url = "http://8.129.13.231/v1/chat-messages"
+
+        # Stream response
+        with requests.post(
+            url,
+            headers=headers,
+            json=data,
+            stream=True,
+        ) as response:
+            response.raise_for_status()
+
+            # Iterate SSE lines
+            for raw in response.iter_lines(decode_unicode=True):
+                if not raw:
+                    # skip empty heartbeat lines
+                    continue
+
+                line = raw.strip()
+
+                # Skip comment/keepalive lines beginning with ':' per SSE spec
+                if line.startswith(":"):
+                    continue
+
+                # Only process data lines
+                if line.startswith("data:"):
+                    payload = line[len("data:") :].strip()
+
+                    # Stream terminator
+                    if payload == "[DONE]":
+                        break
+
+                    # Try decode JSON; tolerate occasional non-JSON/noise
+                    try:
+                        obj = json.loads(payload)
+                    except Exception as je:
+                        logger.debug(f"skip non-JSON SSE payload (len={len(payload)}): {je}")
+                        continue
+
+                    yield obj
+                else:
+                    # Some servers may send raw JSON lines without 'data:' prefix
+                    if line and (line[0] in "[{\""):
+                        try:
+                            obj = json.loads(line)
+                            yield obj
+                            continue
+                        except Exception:
+                            pass
+                    # Unknown SSE field (e.g., event:), ignore safely
+                    logger.debug(f"skip non-data SSE line: {line[:64]}")
+
+        
     def _invoke_ai(self, session: Any, app: Dict[str, Any], content: str, conversation_id: Optional[str], inputs: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None) -> Any:
         """invoke AI interface, get streaming response generator"""
         # record initial conversation id
@@ -122,7 +196,8 @@ class MessageHandler(ABC):
         logger.debug(f"invoke Dify API, parameters: {invoke_params}")
         try:
             try:
-                response_generator = session.app.chat.invoke(**invoke_params)
+                # response_generator = session.app.chat.invoke(**invoke_params)
+                response_generator = self.get_response(content, conversation_id=conversation_id, inputs=inputs)
             except Exception as e:
                 logger.error(f"failed to invoke Dify API: {str(e)}")
                 if hasattr(e, 'response') and hasattr(e.response, 'text'):
@@ -131,8 +206,7 @@ class MessageHandler(ABC):
 
             # get first response chunk
             first_chunk = next(response_generator)
-            # # 打印第一条响应内容确定响应回复时间
-            # logger.info(f"received first chunk from AI interface: {first_chunk}")
+            logger.info(f"received first chunk from AI interface: {first_chunk}")
             # check if it contains conversation_id
             if isinstance(first_chunk, dict) and 'conversation_id' in first_chunk:
                 self.new_conversation_id = first_chunk['conversation_id']
@@ -140,12 +214,14 @@ class MessageHandler(ABC):
                 
                 # immediately save new conversation id
                 if session and hasattr(session, 'storage') and user_id and self.new_conversation_id != self.initial_conversation_id:
-                    try:
-                        storage_key = self.get_storage_key(user_id, app.get("app").get("app_id"))
-                        session.storage.set(storage_key, self.new_conversation_id.encode('utf-8'))
-                        logger.info(f"immediately saved new conversation id for user '{user_id}'")
-                    except Exception as e:
-                        logger.error(f"failed to immediately save conversation id: {str(e)}")
+                    # try:
+                    storage_key = self.get_storage_key(user_id, app.get("app").get("app_id"))
+                    logger.info(self.new_conversation_id.encode('utf-8'))
+                    logger.info(storage_key)
+                    session.storage.set(storage_key, self.new_conversation_id.encode('utf-8'))
+                    logger.info(f"immediately saved new conversation id for user '{user_id}'")
+                    # except Exception as e:
+                        # logger.error(f"failed to immediately save conversation id: {str(e)}")
 
             # create a new generator, first return the first chunk, then return the rest of the original generator
             def combined_generator():
@@ -175,13 +251,21 @@ class MessageHandler(ABC):
                 if not isinstance(chunk, dict):
                     continue
 
-                # process message content
-                if 'answer' in chunk:
+                # accumulate answer text from multiple possible locations
+                if 'answer' in chunk and isinstance(chunk.get('answer'), str):
                     full_content += chunk.get('answer', '')
+                else:
+                    data = chunk.get('data')
+                    if isinstance(data, dict):
+                        # common keys used by dify-like streams
+                        for key in ("answer", "content", "text", "final_answer", "output"):
+                            val = data.get(key)
+                            if isinstance(val, str) and val:
+                                full_content += val
+                                break
 
                 # check message end event
                 if chunk.get('event') == 'message_end':
-                    message_end_received = True
                     break  # receive end event and exit loop directly
 
             # calculate total processing time
